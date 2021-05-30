@@ -7,31 +7,35 @@ from . import dbt_task
 
 logging.basicConfig(level=logging.INFO)
 
+
 class InvalidDagError(Exception):
     pass
 
 
 class DBT:
-    """ 
+    """
     Class to contain logic and metadata for working with a DBT project
-    This can be used to integrate a DBT project with a Prefect flow, and create 
+    This can be used to integrate a DBT project with a Prefect flow, and create
     a mapping of DBT models to Prefect Tasks.
 
     Args:
-        - dbt_manifest (dict): A DBT projects manifest to be used to generate a 
+        - dbt_manifest (dict): A DBT projects manifest to be used to generate a
             task mapping to a Prefect Flow
 
     """
 
-    def __init__(self, manifest_path: str):
+    def __init__(self, manifest_path: str, **kwargs):
         with open(manifest_path) as f:
             self.dbt_manifest = json.load(f)
             self._parse_manifest()
-            self.prefect_flow = self._set_prefect_flow()
+            self.dbt_flow = self._set_prefect_flow()
+
+    def __repr__(self):
+        return str(self.dbt_tasks)
 
     def _make_dbt_task(self, node: str, dbt_verb: str) -> dict:
         """
-        Creates the appropriate shell command to run a DBT model, also sets 
+        Creates the appropriate shell command to run a DBT model, also sets
         dependencies on other models
 
         Args:
@@ -83,9 +87,25 @@ class DBT:
 
         return sub_flow
 
-    def concat_tasks(self, prefect_flow: Flow, task_to_append_to: task = None) -> Flow:
+    def _append_tasks(self, prefect_flow: Flow, terminal_task: task, root_tasks: task):
         """
-        Appends a Prefect Flow generated from a DBT project to an existing 
+        Joins all root tasks of a flow, to a single terminal task of another flow
+
+        Args:
+            prefect_flow (Flow): Parent flow
+            terminal_task (task): Specified terminal task of parent flow
+            root_tasks (task): List of root tasks of child flow
+        """
+
+        prefect_flow.update(self.dbt_flow)
+        for _t in root_tasks:
+            _t.set_dependencies(flow=prefect_flow, upstream_tasks=[terminal_task])
+
+        return prefect_flow
+
+    def join_flow(self, prefect_flow: Flow, task_to_append_to: task = None) -> Flow:
+        """
+        Appends a Prefect Flow generated from a DBT project to an existing
         Prefect Flow.
 
         By default this will append to the most-downstream task in
@@ -94,7 +114,7 @@ class DBT:
 
         Args:
             prefect_flow (Flow): Existing Prefect flow to append to
-            task_to_append_to (task, optional): Specific Task in Flow to append 
+            task_to_append_to (task, optional): Specific Task in Flow to append
                 the new flow to. Defaults to None.
 
         Returns:
@@ -104,19 +124,21 @@ class DBT:
         https://github.com/PrefectHQ/prefect/blob/master/src/prefect/core/flow.py
         """
 
-        # Find last task in the DAG being passed
+        # Find last task(s) in the DAG being passed
+        root_tasks = self.dbt_flow.root_tasks()
 
         if task_to_append_to is None:
             terminal_tasks = prefect_flow.terminal_tasks()
             if len(terminal_tasks) == 1:
                 (terminal_task,) = terminal_tasks
                 logging.info(f"Appending DBT tasks to terminal task: {terminal_task}")
+                joined_flow = self._append_tasks(prefect_flow, terminal_task, root_tasks)
             else:
                 raise InvalidDagError(
                     "There is more than one terminal task in your Flow, please specify a task to append to."
                 )
-
         else:
-            logging.info("Appending to custom task...")
+            logging.info(f"Appending DBT tasks to task {task_to_append_to}")
+            joined_flow = self._append_tasks(prefect_flow, task_to_append_to, root_tasks)
 
-        return
+        return joined_flow

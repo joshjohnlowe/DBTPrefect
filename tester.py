@@ -8,20 +8,45 @@ dbt_flow = DBT(manifest_path="./manifest.json")
 
 # Define a very simple prefect flow
 @task
-def print_stuff():
+def prefect_task_one():
     print("Wow!")
     return "nice"
 
 
 @task
-def second_task(x):
+def prefect_task_two(x):
+    print(x)
+    return "AAA"
+
+
+@task(name="third_task")
+def prefect_task_three(x):
     print(x)
 
 
+
 with Flow("test-flow") as test_flow:
-    a = print_stuff()
-    b = second_task(a)
+    a = prefect_task_one()
+    b = prefect_task_two(a)
+    c = prefect_task_three(b)
 
 
 
-dbt_flow.concat_tasks(test_flow)
+test_flow.visualize()
+
+
+
+
+dbt_flow.join_flow(prefect_flow=test_flow, task_to_append_to=prefect_task_three).visualize()
+
+
+""" 
+testing scenarios 
+
+Prefect flow with more than one terminal task 
+- A "joining" task MUST be specified
+
+DBT flow with more than one root task 
+- Each root task in the DBT flow must have an upstream dependancy 
+    on the Prefect flows specified "joining" task
+"""
